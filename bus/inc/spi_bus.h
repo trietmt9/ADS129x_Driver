@@ -42,7 +42,7 @@ struct spi_dev
  * @param cmd: Command to send
  * @return 0 on success, negative on fail
  */
-int spi_send_cmd(const struct spi_dev* pDev, uint8_t cmd);
+int spi_send_cmd(const struct spi_dev* pDev, uint8_t* cmd);
 
 /*=================================================================
  * SPI REGISTER ACCESS FUNCTIONS

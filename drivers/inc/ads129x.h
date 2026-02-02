@@ -778,6 +778,13 @@ struct emg_buffer
     bool overflow; 
 };
 
+struct ads129x_dev
+{
+    struct spi_dev*            pSpi;       /* Pointer to SPI and CS */
+    const struct gpio_dt_spec* pDRDYpin;   /* DRDY interrupt pin    */
+    struct gpio_callback       drdy_cb;    /* Callback struct       */
+    bool                       data_ready; /* Device state          */
+};
 /*=========================== DSP struct ===========================*/
 struct dsp_double_buffer{                                                                                                                                                                            
       int32_t buffer_a[DSP_BLOCK_SIZE];                                                                                                                                                       
@@ -800,14 +807,14 @@ enum ads129x_read_mode
 
 /**
  * @brief Initialize ADS129x for EMG acquisition
- * @param pDev: Pointer to device struct
+ * @param pAds: Pointer to ADS129x device struct
  * @param pEMG: Pointer to EMG config struct
  * @param pEMGBuffer: Pointer to EMG buffer (will be initialized)
  * @param pDSPBuffer: Pointer to DSP buffer (will be initialized)
- * @param channels: number of channels 
+ * @param channels: number of channels
  * @return 0 on success, negative on fail
  */
-int ads_emg_init(const struct spi_dev* pDev,
+int ads_emg_init(const struct ads129x_dev* pAds,
                  const struct ads129x_emg_config* pEMG,
                  struct emg_buffer* pEMGBuffer,
                  struct dsp_double_buffer* pDSPBuffer,
@@ -815,14 +822,12 @@ int ads_emg_init(const struct spi_dev* pDev,
 
 /**
  * @brief Read EMG data from ADS129x
- * @param pDev: Pointer to device struct
+ * @param pAds: Pointer to ADS129x device struct
  * @param pBuffer: Pointer to EMG buffer
- * @param mode: Read mode (ADS_READ_CONTINUOUS or ADS_READ_SINGLE)
  * @return 0 on success, negative on fail
  */
-int ads_emg_read(const struct spi_dev* pDev,
-                 struct emg_buffer* pBuffer,
-                 enum ads129x_read_mode mode);
+int ads_emg_read(const struct ads129x_dev* pAds,
+                 struct emg_buffer* pBuffer);
 
 /**
  * @brief Process EMG data with DSP double buffer
@@ -835,22 +840,22 @@ int ads_emg_dsp(struct emg_buffer* pEMGBuffer,
 
 /**
  * @brief Start ADS129x conversion
- * @param pDev: Pointer to device struct
+ * @param pAds: Pointer to ADS129x device struct
  * @return 0 on success, negative on fail
  */
-int ads_emg_start(const struct spi_dev* pDev);
+int ads_emg_start_continuous(const struct ads129x_dev* pAds);
 
 /**
  * @brief Stop ADS129x conversion
- * @param pDev: Pointer to device struct
+ * @param pAds: Pointer to ADS129x device struct
  * @return 0 on success, negative on fail
  */
-int ads_emg_stop(const struct spi_dev* pDev);
+int ads_emg_stop(const struct ads129x_dev* pAds);
 
 /**
  * @brief Read ADS129x device ID
- * @param pDev: Pointer to device struct
+ * @param pAds: Pointer to ADS129x device struct
  * @return Device ID on success, negative on fail
  */
-int ads_read_id(const struct spi_dev* pDev);
+int ads_read_id(const struct ads129x_dev* pAds);
 #endif

@@ -12,7 +12,7 @@ LOG_MODULE_REGISTER(spi_bus, CONFIG_SPI_LOG_LEVEL);
  * @param cmd: Command to send
  * @return 0 on success, negative on fail
  */
-int spi_send_cmd(const struct spi_dev* pDev, uint8_t cmd)
+int spi_send_cmd(const struct spi_dev* pDev, uint8_t* cmd)
 {
     if (pDev == NULL || pDev->pSpecSPI == NULL) {
         return -EINVAL;
