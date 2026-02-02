@@ -1,0 +1,75 @@
+/*
+ * Device Tree Overlay for ADS1298 EMG Reader
+ * Board: Nucleo F767ZI
+ *
+ * SPI1 Pins (Arduino Header):
+ *   SCK  : PA5  (D13)
+ *   MISO : PA6  (D12)
+ *   MOSI : PA7  (D11)
+ *
+ * GPIO Pins:
+ *   CS   : PD14 (D10) - directly define to avoid conflict
+ *   DRDY : PF13 (D7)  - Data Ready from ADS1298
+ *   START: PE9  (D6)  - Optional
+ *   RESET: PF14 (D4)  - Optional
+ */
+
+/ {
+    aliases {
+        ads1298-spi = &spi1;
+    };
+
+    /* Define ADS1298 GPIO pins */
+    ads1298_gpios {
+        compatible = "gpio-leds";  /* Using gpio-leds for simple GPIO definition */
+
+        ads1298_cs: ads1298_cs {
+            gpios = <&gpiod 14 GPIO_ACTIVE_LOW>;
+            label = "ADS1298 CS";
+        };
+
+        ads1298_drdy: ads1298_drdy {
+            gpios = <&gpiof 13 GPIO_ACTIVE_LOW>;
+            label = "ADS1298 DRDY";
+        };
+
+        /* Optional control pins - uncomment if using hardware control */
+        /*
+        ads1298_start: ads1298_start {
+            gpios = <&gpioe 9 GPIO_ACTIVE_HIGH>;
+            label = "ADS1298 START";
+        };
+
+        ads1298_reset: ads1298_reset {
+            gpios = <&gpiof 14 GPIO_ACTIVE_LOW>;
+            label = "ADS1298 RESET";
+        };
+        */
+    };
+};
+
+/* Enable and configure SPI1 */
+&spi1 {
+    status = "okay";
+    pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7>;
+    pinctrl-names = "default";
+
+    /*
+     * Note: We use manual CS control in the driver,
+     * so we don't define cs-gpios here.
+     * This allows more precise timing control for ADS1298.
+     */
+};
+
+/* Ensure GPIO ports are enabled */
+&gpiod {
+    status = "okay";
+};
+
+&gpioe {
+    status = "okay";
+};
+
+&gpiof {
+    status = "okay";
+};

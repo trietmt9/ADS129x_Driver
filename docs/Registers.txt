@@ -1,0 +1,121 @@
+ADS1298 Key Registers Summary
+Based on the datasheet, here are the key registers organized by function:
+Device Settings (Read-Only)
+
+0x00 - ID Register (Reset: Device dependent)
+
+Device family and channel count identification
+Read-only register for device identification
+
+
+
+Global Configuration Registers
+0x01 - CONFIG1 (Reset: 0x06)
+
+HR: High resolution mode
+DAISY_EN: Daisy-chain enable
+CLK_EN: Clock output enable
+DR[2:0]: Data rate selection (3 bits)
+
+0x02 - CONFIG2 (Reset: 0x40)
+
+WCT_CHOP: WCT chopping enable
+INT_TEST: Internal test signal enable
+TEST_AMP: Test signal amplitude
+TEST_FREQ[1:0]: Test signal frequency
+
+0x03 - CONFIG3 (Reset: 0x40)
+
+PD_REFBUF: Power-down reference buffer
+VREF_4V: Reference voltage selection
+RLD_MEAS: RLD measurement enable
+RLDREF_INT: Internal RLD reference
+PD_RLD: Power-down RLD
+RLD_LOFF_SENS: RLD lead-off sense
+RLD_STAT: RLD status
+
+0x04 - LOFF (Reset: 0x00)
+
+COMP_TH[2:0]: Comparator threshold
+VLEAD_OFF_EN: Lead-off voltage enable
+ILEAD_OFF[1:0]: Lead-off current magnitude
+FLEAD_OFF[1:0]: Lead-off frequency
+
+Channel-Specific Registers (Per Channel Configuration)
+0x05-0x0C - CH1SET to CH8SET (Reset: 0x00 each)
+
+PDn: Channel power-down
+GAINn[2:0]: PGA gain selection (1, 2, 3, 4, 6, 8, 12)
+MUXn[2:0]: Channel input multiplexer selection
+
+RLD (Right Leg Drive) Configuration
+0x0D - RLD_SENSP (Reset: 0x00)
+
+RLD positive signal selection for each channel
+
+0x0E - RLD_SENSN (Reset: 0x00)
+
+RLD negative signal selection for each channel
+
+Lead-Off Detection
+0x0F - LOFF_SENSP (Reset: 0x00)
+
+Lead-off positive sense enable for each channel
+
+0x10 - LOFF_SENSN (Reset: 0x00)
+
+Lead-off negative sense enable for each channel
+
+0x11 - LOFF_FLIP (Reset: 0x00)
+
+Lead-off current direction flip for each channel
+
+Lead-Off Status (Read-Only)
+0x12 - LOFF_STATP (Reset: 0x00)
+
+Positive electrode lead-off status
+
+0x13 - LOFF_STATN (Reset: 0x00)
+
+Negative electrode lead-off status
+
+GPIO and Auxiliary
+0x14 - GPIO (Reset: 0x0F)
+
+GPIOD[4:1]: GPIO data
+GPIOC[4:1]: GPIO control (direction)
+
+0x15 - PACE (Reset: 0x00)
+
+Pace detection configuration
+PACEE[1:0]: Pace even channels
+PACEO[1:0]: Pace odd channels
+PD_PACE: Power-down pace detect
+
+0x16 - RESP (Reset: 0x00)
+
+Respiration control settings
+RESP_DEMOD_EN1: Respiration demodulation enable
+RESP_MOD_EN1: Respiration modulation enable
+RESP_PH[2:0]: Respiration phase
+RESP_CTRL[1:0]: Respiration control
+
+0x17 - CONFIG4 (Reset: 0x00)
+
+RESP_FREQ[2:0]: Respiration frequency
+SINGLE_SHOT: Single-shot conversion mode
+WCT_TO_RLD: Wilson Central Terminal to RLD
+PD_LOFF_COMP: Power-down lead-off comparators
+
+Wilson Central Terminal
+0x18 - WCT1 (Reset: 0x00)
+
+Wilson Central Terminal configuration
+aVF_CH6, aVL_CH5, aVR_CH7, avR_CH4: ECG lead routing
+PD_WCTA: Power-down WCTA
+WCTA[2:0]: WCTA channel selection
+
+0x19 - WCT2 (Reset: 0x00)
+
+PD_WCTC, PD_WCTB: Power-down WCT amplifiers
+WCTB[2:0], WCTC[2:0]: Channel selections
