@@ -7,24 +7,6 @@ LOG_MODULE_REGISTER(spi_bus, CONFIG_SPI_LOG_LEVEL);
  *=================================================================*/
 
 /**
- * @brief SPI send command
- * @param pDev: Pointer to device struct
- * @param cmd: Command to send
- * @return 0 on success, negative on fail
- */
-int spi_send_cmd(const struct spi_dev* pDev, uint8_t* cmd)
-{
-    if (pDev == NULL || pDev->pSpecSPI == NULL) {
-        return -EINVAL;
-    }
-
-    struct spi_buf buf = {.buf = &cmd, .len = sizeof(cmd)};
-    struct spi_buf_set cmd_buffer = {.buffers = &buf, .count = 1};
-
-    return spi_write_dt(pDev->pSpecSPI, &cmd_buffer);
-}
-
-/**
  * @brief SPI Chip select control
  * @param pSpecGPIO: Pointer to GPIO device tree spec
  * @param state: State to send
@@ -38,6 +20,31 @@ static inline int spi_cs_control(const struct gpio_dt_spec* pSpecGPIO, uint8_t s
     return gpio_pin_set_dt(pSpecGPIO, state);
 }
 
+/**
+ * @brief SPI send command
+ * @param pDev: Pointer to device struct
+ * @param cmd: Command to send
+ * @return 0 on success, negative on fail
+ */
+int spi_send_cmd(const struct spi_dev* pDev, uint8_t cmd)
+{
+    int ret = 0;
+    if (pDev == NULL || pDev->pSpecSPI == NULL || pDev->pSpecGPIO == NULL) {
+        return -EINVAL;
+    }
+    /* Create add buffer */
+    struct spi_buf buf = {.buf = &cmd, .len = sizeof(cmd)};
+    struct spi_buf_set cmd_buffer = {.buffers = &buf, .count = 1};
+    
+    /* Send command */
+    ret = spi_cs_control(pDev->pSpecGPIO, CHIP_SELECTED);
+    if(ret < 0) return ret;
+    ret = spi_write_dt(pDev->pSpecSPI, &cmd_buffer);
+    if(ret < 0) return ret;
+    ret = spi_cs_control(pDev->pSpecGPIO, CHIP_DESELECTED);
+    if(ret < 0) return ret;
+    return ret;
+}
 /*=================================================================
  * SPI REGISTER ACCESS FUNCTIONS
  *=================================================================*/
@@ -53,14 +60,15 @@ int spi_write_register(const struct spi_dev* pDev,
                        const struct spi_buf_set* pAddr_buf,
                        const struct spi_buf_set* pTx_buf)
 {
+    int ret;
+    /* Check NULL pointer */
     if (pDev == NULL || pDev->pSpecSPI == NULL || pDev->pSpecGPIO == NULL) {
         return -EINVAL;
     }
+    /* Check NULL buffer */
     if (pAddr_buf == NULL) {
         return -EINVAL;
     }
-
-    int ret;
 
     spi_cs_control(pDev->pSpecGPIO, CHIP_SELECTED);
 
@@ -87,9 +95,11 @@ int spi_read_register(const struct spi_dev* pDev,
                       const struct spi_buf_set* pAddr_buf,
                       struct spi_buf_set* pRx_buf)
 {
+    /* Check NULL pointer */
     if (pDev == NULL || pDev->pSpecSPI == NULL || pDev->pSpecGPIO == NULL) {
         return -EINVAL;
     }
+    /* Check NULL buffer */
     if (pAddr_buf == NULL) {
         return -EINVAL;
     }
@@ -118,9 +128,11 @@ int spi_set_bits(const struct spi_dev* pDev,
                  const struct spi_buf_set* pAddr_buf,
                  uint8_t mask)
 {
+    /* Check NULL pointer */
     if (pDev == NULL || pDev->pSpecSPI == NULL || pDev->pSpecGPIO == NULL) {
         return -EINVAL;
     }
+    /* Check NULL buffer */
     if (pAddr_buf == NULL) {
         return -EINVAL;
     }
@@ -159,9 +171,11 @@ int spi_clear_bits(const struct spi_dev* pDev,
                    const struct spi_buf_set* pAddr_buf,
                    uint8_t mask)
 {
+    /* Check NULL pointer */
     if (pDev == NULL || pDev->pSpecSPI == NULL || pDev->pSpecGPIO == NULL) {
         return -EINVAL;
     }
+    /* Check NULL buffer */
     if (pAddr_buf == NULL) {
         return -EINVAL;
     }
@@ -200,6 +214,7 @@ int spi_clear_bits(const struct spi_dev* pDev,
  */
 void spi_bus_dumb_config(const struct spi_dev* pDev)
 {
+    /* Check NULL pointer */
     if (pDev == NULL || pDev->pSpecSPI == NULL) {
         LOG_ERR("SPI Config: NULL pointer");
         return;

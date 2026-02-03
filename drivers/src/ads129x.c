@@ -105,6 +105,12 @@ int ads_emg_init(const struct ads129x_dev* pAds, const struct ads129x_emg_config
 int ads_emg_read(const struct ads129x_dev* pAds, struct emg_buffer* pBuffer)
 {
     int ret = 0;
+    /* Check NULL pointer */
+    if(pAds == NULL && pBuffer == NULL)
+    {
+       return -EINVAL;    
+    }
+    
     
 }
 
@@ -126,17 +132,21 @@ int ads_emg_start_continuous(const struct ads129x_dev* pAds)
 {
     int ret = 0;
     uint8_t cmd = 0;
+    /* Check ULL*/
+    if(pAds == NULL) return -EINVAL; 
     /* Step 1: Send read continuous data command */
     cmd = ADS129x_CMD_RDATAC;
-    ret = spi_send_cmd(pAds->pSpi, &cmd);
+    ret = spi_send_cmd(pAds->pSpi, cmd);
     if(ret < 0) return ret;
     /* Step 2: Send Start read data command */
     cmd = ADS129x_CMD_START;
-    ret = spi_send_cmd(pAds->pSpi, &cmd);
+    ret = spi_send_cmd(pAds->pSpi, cmd);
     if(ret < 0) return ret;
 
     /* Step 3: Read interrupts from DRDY pin */
-    gpio_pin_interrupt_configure_dt(pAds->pDRDYpin, GPIO_INT_EDGE_FALLING);
+    ret = gpio_pin_interrupt_configure_dt(pAds->pDRDYpin, GPIO_INT_EDGE_FALLING);
+    if(ret < 0) return ret; 
+    return 0; 
 }
 
 /**
