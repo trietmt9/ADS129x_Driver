@@ -1,0 +1,93 @@
+#include <main.h>
+/* ============== SPI device tree Struct ============== */  
+#define SPI_OPERATION                     (SPI_OP_MODE_1_8BIT | SPI_OP_MODE_MASTER)
+static const struct spi_dt_spec  ads_spi = SPI_DT_SPEC_GET(DT_NODELABEL(ads129x), SPI_OPERATION);
+static const struct gpio_dt_spec ads_cs  = GPIO_DT_SPEC_GET(DT_NODELABEL(ads129x_cs), gpios);
+static const struct gpio_dt_spec ads_rdy = GPIO_DT_SPEC_GET(DT_NODELABEL(ads129x_drdy), gpios);
+static const struct gpio_dt_spec ads_rs  = GPIO_DT_SPEC_GET(DT_NODELABEL(ads129x_reset), gpios);
+/* ============== BUS and Driver Struct ============== */
+static struct spi_dev spi_bus = {
+                     .pSpecSPI  = &ads_spi,
+                     .pSpecGPIO = &ads_cs
+};
+static struct ads129x_dev ads_dev = {                                                                                                                                                
+                              .pSpi    = &spi_bus,                                                                                                                                                                   
+                              .pDRDYpin = &ads_rdy,                                                                                                                                                                
+};      
+
+/* ============== Config buffer ============== */
+static struct ads129x_emg_config emg_conf = {
+                                 .high_resolution = HighResolution,
+                                 .daisy_enable    = multiple_read_back_mode,
+                                 .clock_enable    = osc_clk_output_disable,
+                                 .data_rate       = fmod_div_16,
+                                 .pd_rebuf        = 1,
+                                 .vref_4v         = 0,
+                                 .rlddef_int      = 1,
+                                 .pd_rld          = 1,
+                                 .gain            = gain_6,
+                                 .mux             = normal_electrode_input
+
+};
+/* ============== ADS129x struct ============== */
+struct ads129x_id id_check; 
+int id; 
+static struct emg_buffer        emg_buf;                                                                                                                                                    
+static struct dsp_double_buffer dsp_buf; 
+
+LOG_MODULE_REGISTER(main, LOG_LEVEL_INF);
+int main()
+{
+   int ret;                
+   /* Configure GPIO */                                                                                                                                                               
+   gpio_pin_configure_dt(&ads_cs, GPIO_OUTPUT_INACTIVE);
+   gpio_pin_configure_dt(&ads_rs, GPIO_OUTPUT_ACTIVE);
+   gpio_pin_configure_dt(&ads_rdy, GPIO_INPUT);
+   
+   /* Step 1: Reset registers to default value.
+    * Logical values respect GPIO_ACTIVE_LOW: 1=ACTIVE=physical LOW (in reset),
+    * 0=INACTIVE=physical HIGH (released). Datasheet: hold >=2 tCLK, then wait
+    * >=18 tCLK (~9 us @ 2.048 MHz) after release before the first SPI command. */
+   gpio_pin_set_dt(&ads_rs, GPIO_PIN_SET);
+   k_msleep(10);
+   gpio_pin_set_dt(&ads_rs, GPIO_PIN_RESET);
+   k_usleep(20);
+
+   /* Step 2: Initialize the ADS129x */
+   ret = ads_emg_init(&ads_dev, &emg_conf, &emg_buf, &dsp_buf, ADS129x_NUM_CHANNELS); 
+   if(ret < 0) return ret;
+
+   /* Step 3: Check if the correct chip */
+   ret = ads_read_id(&ads_dev);
+   if(ret < 0) return ret;
+   LOG_INF("ADS129x ID: 0x%02X", ret);
+
+   /* Step 4: Start continuous convertion */
+   ret = ads_emg_start_continuous(&ads_dev);
+   if(ret < 0) return ret;                                                                                                                                                                     
+   while(1)                                                                                                                                                                                    
+   {                                                         
+      //  /* Wait for DRDY interrupt */
+       if(ads_dev.data_ready)
+       {
+           /* Read raw samples into ring buffer */                                                                                                                                             
+           ret = ads_emg_read(&ads_dev, &emg_buf);
+           if(ret < 0) continue;                                                                                                                                                               
+                                                             
+           /* Move samples from ring buffer into DSP buffer */                                                                                                                                 
+           ret = ads_emg_dsp(&emg_buf, &dsp_buf);            
+           if(ret < 0) continue;                                                                                                                                                               
+   
+           /* When DSP block is full, log first sample of each channel */                                                                                                                      
+           if(dsp_buf.ready)                                 
+           {                                                                                                                                                                                   
+               for(uint8_t ch = 0; ch < ADS129x_NUM_CHANNELS; ch++)
+               {                                                                                                                                                                               
+                   LOG_INF("CH%d: %d", ch, dsp_buf.processing[ch][0]);
+               }                                                                                                                                                                               
+               dsp_buf.ready = false;
+           }                                                                                                                                                                                   
+       }                                                     
+   }
+   return 0;
+}

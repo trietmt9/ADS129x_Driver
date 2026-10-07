@@ -1,75 +1,138 @@
 /*
- * Device Tree Overlay for ADS1298 EMG Reader
- * Board: Nucleo F767ZI
+ * Bench-test overlay: ADS1298 evaluation board (SBAU171, REVB) wired to a
+ * Nucleo-F767ZI, using the SAME pin assignment as the custom board
+ * (boards/fes/fesboard/fesboard.dts) so wiring and firmware are identical.
  *
- * SPI1 Pins (Arduino Header):
- *   SCK  : PA5  (D13)
- *   MISO : PA6  (D12)
- *   MOSI : PA7  (D11)
+ * STM32 signal   Pin    ->  Eval board J3 (REVB)
+ *   SPI1 SCK     PA5    ->  J3 pin 3   SCLK
+ *   SPI1 MISO    PA6    ->  J3 pin 13  DOUT
+ *   SPI1 MOSI    PA7    ->  J3 pin 11  DIN
+ *   CS           PA4    ->  J3 pin 1   CS     (set JP21 = 1-2)
+ *   RESET        PB0    ->  J3 pin 10  RESET
+ *   DRDY         PC4    ->  J3 pin 15  DRDY
+ *   START        PB1    ->  J3 pin 14  START  (set JP22 = 2-3)
+ *   PWDN         PC5    ->  JP5 header PWDN   (optional; JP5 open = run)
+ *   GND          any    ->  J3 pin 4   GND
  *
- * GPIO Pins:
- *   CS   : PD14 (D10) - directly define to avoid conflict
- *   DRDY : PF13 (D7)  - Data Ready from ADS1298
- *   START: PE9  (D6)  - Optional
- *   RESET: PF14 (D4)  - Optional
+ * These pins are all on the Nucleo-144 Zio headers (CN7-CN10). Note PB0 is
+ * also LD1 (green LED) and PA4/PC4/PC5/PA7 are used by the DAC/Ethernet on
+ * this board — the &dac1, &mac and &leds nodes are disabled below to free them.
+ *
+ * Eval board jumpers for STM32 use: JP21=1-2, JP22=2-3, JP23=2-3 (internal
+ * clock), JP18=2-3, JP19=1-2 (OSC1 on), JP24=3.3V, JP5 open, unipolar
+ * (JP2=2-3, JP20=1-2). Feed J4 with +5V and +3.3V, grounds common.
  */
 
+#include <zephyr/dt-bindings/gpio/gpio.h>
+
 / {
-    aliases {
-        ads1298-spi = &spi1;
-    };
+	aliases {
+		ads1298-spi = &spi1;
+		nrf-uart = &usart2;
+	};
 
-    /* Define ADS1298 GPIO pins */
-    ads1298_gpios {
-        compatible = "gpio-leds";  /* Using gpio-leds for simple GPIO definition */
+	/* Discrete ADS1298 control lines (not part of the SPI bus) */
+	ads1298_ctrl: ads1298-ctrl {
+		compatible = "gpio-keys";
 
-        ads1298_cs: ads1298_cs {
-            gpios = <&gpiod 14 GPIO_ACTIVE_LOW>;
-            label = "ADS1298 CS";
-        };
-
-        ads1298_drdy: ads1298_drdy {
-            gpios = <&gpiof 13 GPIO_ACTIVE_LOW>;
-            label = "ADS1298 DRDY";
-        };
-
-        /* Optional control pins - uncomment if using hardware control */
-        /*
-        ads1298_start: ads1298_start {
-            gpios = <&gpioe 9 GPIO_ACTIVE_HIGH>;
-            label = "ADS1298 START";
-        };
-
-        ads1298_reset: ads1298_reset {
-            gpios = <&gpiof 14 GPIO_ACTIVE_LOW>;
-            label = "ADS1298 RESET";
-        };
-        */
-    };
+		ads129x_cs: ads129x_cs {
+			gpios = <&gpioa 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; /* PA4 -> J3.1  CS   */
+			label = "ADS1298 CS";
+		};
+		ads129x_reset: ads129x_reset {
+			gpios = <&gpiob 0 GPIO_ACTIVE_LOW>;    /* PB0 -> J3.10 RESET */
+			label = "ADS1298 RESET";
+		};
+		ads129x_pwdn: ads129x_pwdn {
+			gpios = <&gpioc 5 GPIO_ACTIVE_LOW>;    /* PC5 -> JP5   PWDN  */
+			label = "ADS1298 PWDN";
+		};
+		ads129x_start: ads129x_start {
+			gpios = <&gpiob 1 GPIO_ACTIVE_HIGH>;   /* PB1 -> J3.14 START */
+			label = "ADS1298 START";
+		};
+		ads129x_drdy: ads129x_drdy {
+			gpios = <&gpioc 4 (GPIO_ACTIVE_LOW | GPIO_PULL_UP)>; /* PC4 -> J3.15 DRDY (EXTI4) */
+			label = "ADS1298 DRDY";
+		};
+	};
 };
 
-/* Enable and configure SPI1 */
+/*
+ * Free the pins the custom board uses that the Nucleo base DTS claims:
+ *   Ethernet RMII -> PA7 (MOSI), PC4 (DRDY), PC5 (PWDN)
+ *   DAC1 out1     -> PA4 (CS)
+ *   LD1 green LED -> PB0 (RESET)
+ */
+&mac {
+	status = "disabled";
+};
+
+&mdio {
+	status = "disabled";
+};
+
+&dac1 {
+	status = "disabled";
+};
+
+&leds {
+	status = "disabled";
+};
+
+/*
+ * USART2 -> WT02C40C (nRF5340) link, same pins as the custom board:
+ * PA2 TX / PA3 RX. The base Nucleo DTS puts USART2 on PD5/PD6, so override
+ * the pinctrl. Console stays on USART3 (ST-Link VCP), so this UART is free
+ * for the Wi-Fi/BLE module. (PA2 was Ethernet MDIO, already disabled above.)
+ */
+&usart2 {
+	pinctrl-0 = <&usart2_tx_pa2 &usart2_rx_pa3>;
+	pinctrl-names = "default";
+	current-speed = <115200>;
+	status = "okay";
+};
+
+/*
+ * Console + EMG stream share USART3 (the ST-Link VCP, /dev/ttyACM0).
+ *
+ * 921600 rather than the base DTS's 115200: 4 channels x 3 bytes x 1000 SPS is
+ * 12.0 kB/s of payload, and 115200 8N1 tops out at 11.52 kB/s - it cannot carry
+ * the stream at all. At 921600 the link runs about 14 % utilised.
+ *
+ * Sharing one UART is safe because the frame magic 0xAA 0x55 is outside ASCII,
+ * so LOG_* text can never be mistaken for a frame.
+ */
+&usart3 {
+	current-speed = <921600>;
+	status = "okay";
+};
+
 &spi1 {
-    status = "okay";
-    pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7>;
-    pinctrl-names = "default";
+	/*
+	 * The base DTS puts cs-gpios = PD14 on this controller. The ADS1298
+	 * driver drives CS manually via ads129x_cs (PA4), so remove the
+	 * auto-CS to avoid two things driving the chip select.
+	 */
+	/delete-property/ cs-gpios;
+	pinctrl-0 = <&spi1_sck_pa5 &spi1_miso_pa6 &spi1_mosi_pa7>;
+	pinctrl-names = "default";
+	status = "okay";
 
-    /*
-     * Note: We use manual CS control in the driver,
-     * so we don't define cs-gpios here.
-     * This allows more precise timing control for ADS1298.
-     */
+	ads129x: ads129x@0 {
+		compatible = "vnd,spi-device";
+		reg = <0>;
+		/* 8 MHz. The 27-byte read is 108 us at 2 MHz and 27 us at 8 - and the
+		 * shorter the read, the smaller the window in which a conversion can
+		 * land on it. RDATA latching makes that window harmless, but there is
+		 * no reason to keep it large. Datasheet allows 20 MHz. */
+		spi-max-frequency = <8000000>;
+		spi-cpha;                           /* SPI mode 1: CPOL=0, CPHA=1 */
+		spi-interframe-delay-ns = <0>;
+	};
 };
 
-/* Ensure GPIO ports are enabled */
-&gpiod {
-    status = "okay";
-};
-
-&gpioe {
-    status = "okay";
-};
-
-&gpiof {
-    status = "okay";
-};
+/* Ensure the GPIO ports used above are enabled */
+&gpioa { status = "okay"; };
+&gpiob { status = "okay"; };
+&gpioc { status = "okay"; };

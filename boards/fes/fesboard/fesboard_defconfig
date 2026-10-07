@@ -1,0 +1,14 @@
+# SPDX-License-Identifier: Apache-2.0
+
+# Cortex-M7 protections
+CONFIG_ARM_MPU=y
+CONFIG_HW_STACK_PROTECTION=y
+
+# Serial + console (USART2 -> WT02C40C link / bring-up console)
+CONFIG_SERIAL=y
+CONFIG_CONSOLE=y
+CONFIG_UART_CONSOLE=y
+
+# GPIO + SPI for the ADS1298 AFE and ICM-42688 IMU
+CONFIG_GPIO=y
+CONFIG_SPI=y

@@ -1,0 +1,15 @@
+identifier: fesboard
+name: FES Board STM32F767ZI
+type: mcu
+arch: arm
+toolchain:
+  - zephyr
+  - gnuarmemb
+ram: 512
+flash: 2048
+supported:
+  - gpio
+  - spi
+  - serial
+  - usb_device
+vendor: fes

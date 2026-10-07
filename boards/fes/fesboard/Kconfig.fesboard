@@ -1,0 +1,5 @@
+# FES Board board definition
+# SPDX-License-Identifier: Apache-2.0
+
+config BOARD_FESBOARD
+	select SOC_STM32F767XX

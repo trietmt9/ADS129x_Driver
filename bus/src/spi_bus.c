@@ -56,9 +56,7 @@ int spi_send_cmd(const struct spi_dev* pDev, uint8_t cmd)
  * @param pTx_buf: Transmit buffer
  * @return 0 on success, negative on fail
  */
-int spi_write_register(const struct spi_dev* pDev,
-                       const struct spi_buf_set* pAddr_buf,
-                       const struct spi_buf_set* pTx_buf)
+int spi_write_register(const struct spi_dev* pDev, const struct spi_buf_set* pAddr_buf, const struct spi_buf_set* pTx_buf)
 {
     int ret;
     /* Check NULL pointer */
@@ -81,6 +79,43 @@ int spi_write_register(const struct spi_dev* pDev,
     ret = spi_write_dt(pDev->pSpecSPI, pTx_buf);
     spi_cs_control(pDev->pSpecGPIO, CHIP_DESELECTED);
 
+    return ret;
+}
+
+/**
+ * @brief Write a byte sequence as ONE transaction inside a single CS assertion.
+ *
+ * spi_write_register() splits a register write into two spi_write_dt() calls -
+ * opcode bytes, then data. The read path does not: spi_read_register() sends
+ * its three bytes in a single spi_transceive_dt(), and reads demonstrably work
+ * while writes did not take at all.
+ *
+ * Use this for register writes so the write path is structurally identical to
+ * the read path that is known to work.
+ *
+ * @param pDev: Pointer to device struct
+ * @param data: bytes to send
+ * @param len:  how many
+ * @return 0 on success, negative on fail
+ */
+int spi_write_bytes(const struct spi_dev* pDev, const uint8_t* data, size_t len)
+{
+    if (pDev == NULL || pDev->pSpecSPI == NULL || pDev->pSpecGPIO == NULL ||
+        data == NULL || len == 0u) {
+        return -EINVAL;
+    }
+
+    struct spi_buf     buf     = { .buf = (void *)data, .len = len };
+    struct spi_buf_set buf_set = { .buffers = &buf, .count = 1 };
+
+    int ret = spi_cs_control(pDev->pSpecGPIO, CHIP_SELECTED);
+    if (ret < 0) {
+        return ret;
+    }
+
+    ret = spi_write_dt(pDev->pSpecSPI, &buf_set);
+
+    spi_cs_control(pDev->pSpecGPIO, CHIP_DESELECTED);
     return ret;
 }
 
@@ -113,6 +148,26 @@ int spi_read_register(const struct spi_dev* pDev,
     return ret;
 }
 
+/**
+ * @brief SPI read data stream function
+ * @param pDev: Pointer to device struct
+ * @param pRx_buf: Pointer to receive buffer
+ * @return 0 on success, negative on fail
+ */
+int spi_read_stream(const struct spi_dev* pDev, struct spi_buf_set* pRx_buf)
+{
+    if(pDev == NULL || pDev->pSpecGPIO == NULL || pDev->pSpecSPI == NULL ||pRx_buf == NULL) return -EINVAL;
+    int ret;
+    spi_cs_control(pDev->pSpecGPIO, CHIP_SELECTED);
+    ret = spi_read_dt(pDev->pSpecSPI, pRx_buf);
+    /* Deassert on the error path too. Returning with CS still low leaves the
+     * ADS129x mid-transaction: the next read starts part-way through a 27-byte
+     * RDATAC frame and every frame after it is byte-shifted, which decodes to
+     * large, fast, plausibly biological-looking noise rather than to an obvious
+     * fault. One failed transfer would otherwise corrupt the stream forever. */
+    spi_cs_control(pDev->pSpecGPIO, CHIP_DESELECTED);
+    return ret;
+}
 /*=================================================================
  * SPI BIT MANIPULATION FUNCTIONS
  *=================================================================*/

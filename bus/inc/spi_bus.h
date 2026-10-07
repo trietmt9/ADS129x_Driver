@@ -8,9 +8,8 @@
 /*=================================================================
  * SPI OPERATION MACROS 
  *=================================================================*/
-#define CHIP_SELECTED                 0
-#define CHIP_DESELECTED               1
-
+#define CHIP_SELECTED                 1
+#define CHIP_DESELECTED               0
 /* 8-bits word */
 #define SPI_OP_MODE_0_8BIT            SPI_WORD_SET(8)                                       /* CPHA = 0, CPOL = 0 */
 #define SPI_OP_MODE_1_8BIT           (SPI_WORD_SET(8) | SPI_MODE_CPHA)                      /* CPHA = 1, CPOL = 0 */
@@ -60,6 +59,20 @@ int spi_write_register(const struct spi_dev* pDev,
                        const struct spi_buf_set* pTx_buf);
 
 /**
+ * @brief Write a byte sequence as one transaction inside a single CS assertion.
+ *
+ * Register writes must use this rather than spi_write_register(): that function
+ * splits opcode and data into two spi_write_dt() calls, while the working read
+ * path sends everything in one. See the comment in spi_bus.c.
+ *
+ * @param pDev: Pointer to device struct
+ * @param data: bytes to send
+ * @param len:  how many
+ * @return 0 on success, negative on fail
+ */
+int spi_write_bytes(const struct spi_dev* pDev, const uint8_t* data, size_t len);
+
+/**
  * @brief SPI read register function
  * @param pDev: Pointer to device struct
  * @param pAddr_buf: Pointer to register address buffer
@@ -68,6 +81,15 @@ int spi_write_register(const struct spi_dev* pDev,
  */
 int spi_read_register(const struct spi_dev* pDev,
                       const struct spi_buf_set* pAddr_buf,
+                      struct spi_buf_set* pRx_buf);
+
+/**
+ * @brief SPI read data stream function
+ * @param pDev: Pointer to device struct
+ * @param pRx_buf: Pointer to receive buffer
+ * @return 0 on success, negative on fail
+ */
+int spi_read_stream(const struct spi_dev* pDev,
                       struct spi_buf_set* pRx_buf);
 
 /*=================================================================

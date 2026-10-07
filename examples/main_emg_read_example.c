@@ -1,9 +1,41 @@
 /*
- * ECG acquisition example: one channel, median + 40 Hz low-pass on the board,
- * framed binary samples to the host.
+ * sEMG acquisition: one channel, median + 20-450 Hz band-pass (+ optional
+ * 60 Hz notch) on the board, framed binary samples to the host.
  *
- * Snapshot of src/main.c. To use it, copy over src/main.c and rebuild - the
- * build compiles src/main.c only, so editing this file changes nothing.
+ * THIS FILE IS THE CANONICAL EMG APPLICATION. src/main.c has been reverted by
+ * an editor several times; if it loses these settings again, copy this over it.
+ * The build compiles src/main.c only, so editing this file alone changes
+ * nothing that runs.
+ *
+ * Built from main_ecg.c, which carries the hard-won parts: RDATA not RDATAC
+ * (B-032), single-transaction register writes (B-025), register readback
+ * (B-020/B-025), a measured rather than calculated rate (B-026), a sample ring
+ * (B-033), a floor on the DRDY re-read interval (B-020/B-033) and a DRDY
+ * liveness check (B-034).
+ *
+ * WHEN THE TRACE LOOKS DEAD, SET EMG_SELFTEST TO 1 FIRST. It injects the
+ * chip's own square wave downstream of the electrodes and tells you in one
+ * step whether the fault is the electrodes or the signal chain. Guessing
+ * between those two has cost more time on this project than anything else.
+ *
+ * What differs from ECG, and why:
+ *
+ *   rate    fmod_div_256 -> 2 kSPS, not fmod_div_512 (1 kSPS). The ADC's
+ *           sinc^3 decimation is -3 dB at 0.262 x fDR, so 1 kSPS rolls off at
+ *           262 Hz - inside the sEMG band, unrecoverable by host filtering.
+ *           2 kSPS puts the corner at 524 Hz, clear of the 450 Hz band top.
+ *
+ *   band    20-450 Hz (SENIAM). NOT narrower: a 10-20 Hz band passes about
+ *           4 % of sEMG power, because the spectrum peaks near 60-100 Hz.
+ *           Noise inside the band is an interference problem, not a bandwidth
+ *           problem - fix it with the RLD loop below.
+ *
+ *   RLD     RLD_SENSP/RLD_SENSN now select the active channel. Left at 0x00
+ *           the feedback loop is OPEN and the chip cancels no common mode.
+ *
+ *   gain    unchanged at 6. sEMG is 50-500 uV so gain 12 suits the signal, but
+ *           this AFE is DC-coupled and electrode offset reaches hundreds of
+ *           mV; the headroom goes to offset. Raise only after measuring it.
  *
  * Start-up order and DRDY/RDATA rules: ../../WORKFLOW.md sections 4d-4e.
  */
@@ -21,7 +53,7 @@ LOG_MODULE_REGISTER(ads_read, LOG_LEVEL_INF);
 #define EMG_SAMPLE_RATE_HZ  2000       /* nominal; real rate is measured      */
 #define EMG_VREF_UV         2400000
 #define EMG_GAIN            6          /* +/- 400 mV FS, 0.0477 uV/LSB        */
-#define BLOCK_SAMPLES       32         /* 32 ms per frame at 1 kSPS           */
+#define BLOCK_SAMPLES       32         /* 16 ms per frame at 2 kSPS           */
 
 /* Conversions held between acquisition and transmission.
  *
@@ -60,8 +92,49 @@ LOG_MODULE_REGISTER(ads_read, LOG_LEVEL_INF);
  */
 #define MIN_READ_INTERVAL_US 250u
 #define RATE_SETTLE_MS      3000
-#define ECG_HIGHPASS_HZ     2.0f
-#define ECG_LOWPASS_HZ      40.0f
+/* Self-test: 1 injects the chip's own +/-1 mV square wave, 0 = normal.
+ *
+ * Generated INSIDE the ADS1298, downstream of the electrodes:
+ *   square visible -> ADC, PGA, SPI, RDATA, framing, CRC, UART and the host
+ *                     decode all work. The fault is electrodes/placement/RLD.
+ *   nothing        -> the fault is in that chain; electrode work will not help.
+ *
+ * The wave is ~1 Hz, which a 20 Hz high-pass would differentiate into edge
+ * spikes, so self-test widens the band too. Both switch together on purpose.
+ */
+#define EMG_SELFTEST        0
+
+#if EMG_SELFTEST
+#define EMG_HIGHPASS_HZ     0.0f       /* pass the ~1 Hz test square */
+#define EMG_LOWPASS_HZ      100.0f
+#else
+#define EMG_HIGHPASS_HZ     20.0f      /* SENIAM. Do NOT narrow to chase noise */
+#define EMG_LOWPASS_HZ      450.0f
+#endif
+
+/* Mains notch. 0 disables. Try it OFF first now that the RLD loop is closed.
+ *
+ * A compromise, not a good default: sEMG's dominant energy is 50-150 Hz, so a
+ * 60 Hz notch cuts the middle of the band and removes muscle signal with the
+ * interference. It also biases median/mean frequency, so fatigue analysis on
+ * notched data is invalid. Measured cost here: -28 dB at 60 Hz, ~2 Hz wide,
+ * 3.7 % of in-band sEMG power.
+ */
+#define EMG_NOTCH_HZ        60.0f
+#define EMG_NOTCH_Q         30.0f
+
+/* Channels feeding the right-leg-drive derivation, one bit per channel.
+ *
+ * 0x00 LEAVES THE RLD FEEDBACK LOOP OPEN. The RLD amplifier senses the
+ * common-mode of the channels selected here, inverts it and drives it back
+ * into the body; with nothing selected it emits a static mid-supply bias and
+ * cancels nothing, so rejection falls back to the INA's own CMRR. The body's
+ * common mode can then leave the ADS1298's input range (AVSS+0.3 to AVDD-0.3)
+ * and saturate the PGA - noise that does not respond to contraction.
+ *
+ * Route only ATTACHED electrodes: a floating input feeds the loop noise.
+ */
+#define RLD_SENSE_MASK      (1u << (ADS_CHANNEL - 1))
 
 #ifdef ADS_STREAM_ALL
 #define N_STREAM  ADS129x_NUM_CHANNELS
@@ -91,10 +164,14 @@ static struct ads129x_emg_config conf = {
 	.high_resolution = HighResolution,
 	.daisy_enable    = multiple_read_back_mode,
 	.clock_enable    = osc_clk_output_disable,
-	.data_rate       = fmod_div_512,
+	.data_rate       = fmod_div_256,   /* HR mode: 2 kSPS - see header */
 
 	.wct_chop = chopping_frequency_varies,
+#if EMG_SELFTEST
+	.int_test = test_signal_generated_internal,
+#else
 	.int_test = test_signal_driven_external,
+#endif
 	.test_amp = x1times,
 	.test_freq = fclk_div_2pow21,
 
@@ -104,9 +181,13 @@ static struct ads129x_emg_config conf = {
 	.pd_rld     = rld_buffer_enable,
 
 	.gain = gain_6,
+#if EMG_SELFTEST
+	.mux  = test_signal,               /* internal square wave, not the pins */
+#else
 	.mux  = normal_electrode_input,
+#endif
 
-	.rld_sensp  = 0x00, .rld_sensn  = 0x00,
+	.rld_sensp  = RLD_SENSE_MASK, .rld_sensn  = RLD_SENSE_MASK,
 	.wct1       = 0x00, .wct2       = 0x00,
 	.loff       = 0x00, .config4    = 0x00,
 	.loff_sensp = 0x00, .loff_sensn = 0x00,
@@ -284,9 +365,29 @@ static void report(int64_t now, int64_t elapsed)
 			}
 			rate_locked = true;
 
-			bio_filter_init(&filt, (float)advertised_rate, ECG_HIGHPASS_HZ, ECG_LOWPASS_HZ);
-			LOG_INF("rate locked at %u SPS (nominal %u)",
-				advertised_rate, EMG_SAMPLE_RATE_HZ);
+			/* Redesign at the measured rate (B-026). A 450 Hz corner is
+			 * only valid above 900 SPS, so check it rather than let
+			 * bio_filter_init() fail and silently leave coefficients for a
+			 * rate we no longer run at. */
+			float lp = EMG_LOWPASS_HZ;
+			if (lp >= (float)advertised_rate * 0.45f) {
+				lp = (float)advertised_rate * 0.45f;
+				LOG_WRN("%u SPS cannot carry a %d Hz corner; clamped to "
+					"%d Hz. sEMG above that is LOST - raise the rate.",
+					advertised_rate, (int)EMG_LOWPASS_HZ, (int)lp);
+			}
+			if (bio_filter_init(&filt, (float)advertised_rate,
+					    EMG_HIGHPASS_HZ, lp) < 0) {
+				LOG_ERR("filter redesign failed at %u SPS", advertised_rate);
+			}
+			/* AFTER init: bio_filter_init() clears the notch. */
+			if (bio_filter_set_notch(&filt, (float)advertised_rate,
+						 EMG_NOTCH_HZ, EMG_NOTCH_Q) < 0) {
+				LOG_ERR("notch redesign failed at %u SPS", advertised_rate);
+			}
+			LOG_INF("rate locked at %u SPS (nominal %u), band %d-%d Hz",
+				advertised_rate, EMG_SAMPLE_RATE_HZ,
+				(int)EMG_HIGHPASS_HZ, (int)lp);
 		}
 	}
 
@@ -368,14 +469,22 @@ int main(void)
 
 	}
 
-	/* Median removes spikes, then the low-pass removes HF noise. */
-	/* STEP 2: build the filter. */
-	if (bio_filter_init(&filt, (float)EMG_SAMPLE_RATE_HZ, ECG_HIGHPASS_HZ, ECG_LOWPASS_HZ) < 0) {
+	/* STEP 2: build the filter. Median (impulses), band-pass, then the notch.
+	 * Order matters: bio_filter_init() CLEARS the notch, so set_notch() must
+	 * follow it, never precede it. */
+	if (bio_filter_init(&filt, (float)EMG_SAMPLE_RATE_HZ, EMG_HIGHPASS_HZ,
+			    EMG_LOWPASS_HZ) < 0) {
 		LOG_ERR("bio_filter_init failed");
 		return -EINVAL;
 	}
-	LOG_INF("filter: median + 4th-order band-pass %d.%d-%d Hz", 0, 5,
-		(int)ECG_LOWPASS_HZ);
+	// if (bio_filter_set_notch(&filt, (float)EMG_SAMPLE_RATE_HZ,
+	// 			 EMG_NOTCH_HZ, EMG_NOTCH_Q) < 0) {
+	// 	LOG_ERR("notch design failed");
+	// }
+	LOG_INF("filter: median + band-pass %d-%d Hz%s%s",
+		(int)EMG_HIGHPASS_HZ, (int)EMG_LOWPASS_HZ,
+		EMG_NOTCH_HZ > 0.0f ? " + 60 Hz notch" : "",
+		EMG_SELFTEST ? "   [SELF-TEST: internal square wave]" : "");
 
 	/* STEP 3: start converting. */
 	int ret = ads_emg_start_rdata(&ads);   /* converts, stays out of RDATAC */

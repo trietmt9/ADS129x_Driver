@@ -1,0 +1,6 @@
+board:
+  name: fesboard
+  full_name: FES Board (STM32F767ZI biopotential AFE)
+  vendor: fes
+  socs:
+    - name: stm32f767xx

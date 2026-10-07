@@ -1,26 +1,33 @@
 #ifndef __ADS129X_H__
 #define __ADS129X_H__
 #include <spi_bus.h>
+#include <iir.h>
 #include <zephyr/sys/ring_buffer.h>
 /*=================================================================
  *                          ADS1298 GENERAL MACROS
  *=================================================================*/
 /*======================= NUMBER OF CHANNELS ======================*/
 #define ADS1294_NUM_CHANNELS                                     0x04u
+#define ADS1294_NUM_BYTES                                        0x0Fu /* 15 Bytes */
 #define ADS1296_NUM_CHANNELS                                     0x06u
+#define ADS1296_NUM_BYTES                                        0x15u /* 21 Bytes */
 #define ADS1298_NUM_CHANNELS                                     0x08u
-#ifdef ADS129x_4CHANNELS
+#define ADS1298_NUM_BYTES                                        0x1Bu /* 27 Bytes */
+#ifdef ADS1294
 #define ADS129x_NUM_CHANNELS                                     ADS1294_NUM_CHANNELS
-#elif defined(ADS129x_6CHANNELS)
+#define ADS129x_NUM_BYTES                                        ADS1294_NUM_BYTES                              
+#elif defined(ADS1296)
 #define ADS129x_NUM_CHANNELS                                     ADS1296_NUM_CHANNELS
-#else
+#define ADS129x_NUM_BYTES                                        ADS1296_NUM_BYTES 
+#else  
 #define ADS129x_NUM_CHANNELS                                     ADS1298_NUM_CHANNELS
+#define ADS129x_NUM_BYTES                                        ADS1298_NUM_BYTES 
 #endif 
 /*====================== ADS129x BUFFER SIZE ======================*/
 #define ADS129x_BUFFER_SIZE                                      256
 
 /*======================= DOUBLE BUFFER DSP =======================*/                                                                         
-#define DSP_BLOCK_SIZE                                           64 
+#define DSP_BLOCK_SIZE                                           32 /* 32 ms/frame at 1000 SPS */
 
 /*=================================================================
  *                          ADS1298 COMMANDS
@@ -123,6 +130,14 @@
 /* RLD_SENSN Register */
 #define ADS129x_RLDnN_POS(n)                                     ((n) - 1)
 #define ADS129x_RLDnN_MASKED(n)                                  (1u << ADS129x_RLDnN_POS(n))
+/* WCT1 Register */
+#define ADS129x_WCT1_PD_WCTA_POS                                 0x3u
+#define ADS129x_WCT1_WCTA_POS                                    0x0u
+/* WCT2 Register */
+#define ADS129x_WCT2_PD_WCTC_POS                                 0x7u
+#define ADS129x_WCT2_PD_WCTB_POS                                 0x6u
+#define ADS129x_WCT2_WCTB_POS                                    0x3u
+#define ADS129x_WCT2_WCTC_POS                                    0x0u
 
 /*=================================================================
  *                         ADS1298 Device Setting Bits 
@@ -749,19 +764,117 @@ enum wctc
 struct ads129x_emg_config
 {
     /* Configuration from CONFIG1 register */
-    uint8_t high_resolution; 
+    uint8_t high_resolution;
     uint8_t daisy_enable;
     uint8_t clock_enable;
-    uint8_t data_rate; 
+    uint8_t data_rate;
+    /* Configuration from CONFIG2 register (test-signal generation).
+     * Leave all four at 0 for normal acquisition - the register still has to be
+     * written, see the note in ads_emg_init(). */
+    uint8_t wct_chop;
+    uint8_t int_test;
+    uint8_t test_amp;
+    uint8_t test_freq;
     /* Configuration from CONFIG3 register */
-    uint8_t pd_rebuf; 
-    uint8_t vref_4v;  
-    uint8_t rlddef_int; 
-    uint8_t pd_rld; 
+    uint8_t pd_rebuf;
+    uint8_t vref_4v;
+    uint8_t rlddef_int;
+    uint8_t pd_rld;
     /* Configuration from CHnSET register */
     uint8_t gain;
-    uint8_t mux; 
+    uint8_t mux;
+    /* RLD derivation (RLD_SENSP / RLD_SENSN). Bit (n-1) routes channel n's
+     * positive/negative input into the right-leg-drive amplifier. Both reset to
+     * 0x00, which leaves RLDOUT as a passive mid-supply bias with no
+     * common-mode feedback - see ADS129x_ECG_RLD_SENS*_3LEAD. */
+    uint8_t rld_sensp;
+    uint8_t rld_sensn;
+    /* Wilson Central Terminal, written verbatim into WCT1 / WCT2. Both reset to
+     * 0x00, which leaves all three WCT amplifiers powered down. */
+    uint8_t wct1;
+    uint8_t wct2;
+    /* Lead-off detection. Written verbatim into LOFF / CONFIG4 / LOFF_SENSP /
+     * LOFF_SENSN.
+     *
+     * All four are needed together. Powering the comparators (CONFIG4) while
+     * leaving LOFF_SENSP/N at zero monitors nothing - a trap, because the
+     * reference implementation this was taken from publishes exactly that
+     * combination in its register table (see paper/REFERENCE_NOTES.md). */
+    uint8_t loff;
+    uint8_t config4;
+    uint8_t loff_sensp;
+    uint8_t loff_sensn;
 };
+
+/*=================================================================
+ *        ECG presets for the ADS1298ECG-FE (SBAU171) wiring
+ *=================================================================*/
+/* The eval board wires the limb electrodes so that
+ *     CH2 = LEAD I  = LA - RA   ->  IN2P = LA, IN2N = RA
+ *     CH3 = LEAD II = LL - RA   ->  IN3P = LL, IN3N = RA
+ * CH1 and CH4-CH8 are single-ended precordial channels measured against WCT;
+ * JP16 ships installed, tying WCT to their negative inputs. With the WCT
+ * amplifiers powered down those inputs are undriven, so CH1/CH4 read nothing
+ * meaningful until WCT2 below powers them on.
+ *
+ * On the FES_Board itself J1-J4 are true differential pairs and never touch
+ * WCT, so these presets apply to eval-board bring-up only. */
+
+/* Right-leg drive as the average of RA, LA and LL - the standard ECG
+ * arrangement (SBAU171 section 4.8). */
+#define ADS129x_ECG_RLD_SENSP_3LEAD  (ADS129x_RLDnP_MASKED(2) |  /* IN2P = LA */\
+                                      ADS129x_RLDnP_MASKED(3))   /* IN3P = LL */
+#define ADS129x_ECG_RLD_SENSN_3LEAD  (ADS129x_RLDnN_MASKED(2))   /* IN2N = RA */
+
+/* WCT = (RA + LA + LL)/3: amplifier A on RA, B on LA, C on LL, all powered on.
+ * The augmented-lead taps (aVR/aVL/aVF) stay disabled - they would only feed
+ * CH4-CH7, which have no electrodes on a 3-lead hookup. */
+#define ADS129x_ECG_WCT1_3LEAD                                                  \
+    ((pd_wcta_power_on                          << ADS129x_WCT1_PD_WCTA_POS) |  \
+     (channel_2_negative_input_connected_to_wcta << ADS129x_WCT1_WCTA_POS))
+#define ADS129x_ECG_WCT2_3LEAD                                                  \
+    ((pd_wctc_power_on                          << ADS129x_WCT2_PD_WCTC_POS) |  \
+     (pd_wctb_power_on                          << ADS129x_WCT2_PD_WCTB_POS) |  \
+     (channel_2_positive_input_connected_to_wctb << ADS129x_WCT2_WCTB_POS)   |  \
+     (channel_3_positive_input_connected_to_wctc << ADS129x_WCT2_WCTC_POS))
+
+/* ---- 3-electrode hookup: RA, LA and RL only (no LL) ----
+ *
+ * This is what a limb-lead simulator gives you on three leads, and it yields
+ * exactly ONE lead:  LEAD I = LA - RA.  LEAD II needs LL, so CH3 has an open
+ * positive input and must not be streamed - a DC-coupled open PGA input drifts
+ * to a rail and delivers full-scale mash.
+ *
+ * The derivation below matters more than the dead channel. RLD sums the
+ * selected inputs and drives the result back into the body through RL, so
+ * including a DISCONNECTED electrode puts that pin's pickup directly into the
+ * common-mode feedback loop - which contaminates EVERY channel, including the
+ * Lead I that would otherwise be clean. Derive RLD only from electrodes that
+ * are physically attached.
+ *
+ * WCT is powered down for the same reason: with three electrodes there are no
+ * precordial channels to reference to it, and WCTC would otherwise be driven
+ * from the floating LL.
+ */
+#define ADS129x_ECG_RLD_SENSP_RA_LA  (ADS129x_RLDnP_MASKED(2))   /* IN2P = LA */
+#define ADS129x_ECG_RLD_SENSN_RA_LA  (ADS129x_RLDnN_MASKED(2))   /* IN2N = RA */
+#define ADS129x_ECG_WCT1_OFF         0x00u
+#define ADS129x_ECG_WCT2_OFF         0x00u
+
+/*=================================================================
+ *              RDATAC status word (datasheet 9.4.1.3.1)
+ *=================================================================*/
+/* The 24 bits that precede the channel data every sample:
+ *
+ *   1100 | LOFF_STATP[8] | LOFF_STATN[8] | GPIO[4]
+ *
+ * We already clock these in on every read - they are what the frame-alignment
+ * check inspects - so lead-off status costs nothing extra on the wire. A set
+ * bit means that electrode is OFF.
+ */
+#define ADS129x_STATUS_LOFFP(raw)  ((uint8_t)((((raw)[0] & 0x0Fu) << 4) | ((raw)[1] >> 4)))
+#define ADS129x_STATUS_LOFFN(raw)  ((uint8_t)((((raw)[1] & 0x0Fu) << 4) | ((raw)[2] >> 4)))
+#define ADS129x_STATUS_GPIO(raw)   ((uint8_t)((raw)[2] & 0x0Fu))
 
 /*======================= Ring Buffer struct =======================*/
 struct emg_channel_buffer
@@ -783,16 +896,17 @@ struct ads129x_dev
     struct spi_dev*            pSpi;       /* Pointer to SPI and CS */
     const struct gpio_dt_spec* pDRDYpin;   /* DRDY interrupt pin    */
     struct gpio_callback       drdy_cb;    /* Callback struct       */
-    bool                       data_ready; /* Device state          */
+    volatile bool              data_ready; /* Device state          */
+    uint8_t                    status[3];  /* Last RDATAC status word */
 };
 /*=========================== DSP struct ===========================*/
 struct dsp_double_buffer{                                                                                                                                                                            
-      int32_t buffer_a[DSP_BLOCK_SIZE];                                                                                                                                                       
-      int32_t buffer_b[DSP_BLOCK_SIZE];                                                                                                                                                       
-      int32_t *active;      /* Being filled from circular buffer */                                                                                                                           
-      int32_t *processing;  /* Being processed by DSP */                                                                                                                                      
-      uint16_t fill_index;                                                                                                                                        
-      bool ready;           /* Processing buffer has new data */                                                                                                                              
+      int32_t buffer_a[ADS129x_NUM_CHANNELS][DSP_BLOCK_SIZE];     /* Nx64 samples*/                                                                                                                                                 
+      int32_t buffer_b[ADS129x_NUM_CHANNELS][DSP_BLOCK_SIZE];     /* Nx64 samples*/                                                                                                                                                  
+      int32_t (*active)[DSP_BLOCK_SIZE];                          /* pointer to active 2D slice */                                                                                                                             
+      int32_t (*processing)[DSP_BLOCK_SIZE];                      /* pointer to processing slice */                                                                                                                                       
+      uint16_t fill_index;                                        /* current sample position 0-63 */                                                                                                                    
+      bool ready;                                                 /* Processing buffer has new data */                                                                                                                              
 }; 
 
 enum ads129x_read_mode
@@ -806,13 +920,17 @@ enum ads129x_read_mode
  *=================================================================*/
 
 /**
- * @brief Initialize ADS129x for EMG acquisition
- * @param pAds: Pointer to ADS129x device struct
- * @param pEMG: Pointer to EMG config struct
- * @param pEMGBuffer: Pointer to EMG buffer (will be initialized)
- * @param pDSPBuffer: Pointer to DSP buffer (will be initialized)
- * @param channels: number of channels
- * @return 0 on success, negative on fail
+ * @brief Configure the device: CONFIG1-4, CHnSET, RLD, WCT and lead-off.
+ *
+ * Sends SDATAC first, since register writes are ignored in continuous mode,
+ * and waits for the internal reference to settle before returning.
+ *
+ * @param pAds        Device handle.
+ * @param pEMG        Configuration to apply.
+ * @param pEMGBuffer  Optional ring buffers, initialised if non-NULL.
+ * @param pDSPBuffer  Optional DSP double buffer, initialised if non-NULL.
+ * @param channels    Channels to configure, 1..ADS129x_NUM_CHANNELS.
+ * @return 0 on success, negative errno on failure.
  */
 int ads_emg_init(const struct ads129x_dev* pAds,
                  const struct ads129x_emg_config* pEMG,
@@ -821,41 +939,95 @@ int ads_emg_init(const struct ads129x_dev* pAds,
                  uint8_t channels);
 
 /**
- * @brief Read EMG data from ADS129x
- * @param pAds: Pointer to ADS129x device struct
- * @param pBuffer: Pointer to EMG buffer
- * @return 0 on success, negative on fail
+ * @brief Read every configuration register back and compare against @p pEMG.
+ *
+ * Call after ads_emg_init(). Each mismatch is logged as
+ * "REG: wrote 0xNN, reads 0xNN".
+ *
+ * @param pAds      Device handle.
+ * @param pEMG      Configuration that was applied.
+ * @param channels  Channels to check, 1..ADS129x_NUM_CHANNELS.
+ * @return Number of registers that disagree (0 = all correct), or negative
+ *         errno if the bus failed.
  */
-int ads_emg_read(const struct ads129x_dev* pAds,
-                 struct emg_buffer* pBuffer);
+int ads_emg_verify(const struct ads129x_dev* pAds,
+                   const struct ads129x_emg_config* pEMG,
+                   uint8_t channels);
 
 /**
- * @brief Process EMG data with DSP double buffer
- * @param pEMGBuffer: Pointer to EMG buffer (source)
- * @param pDSPBuffer: Pointer to DSP buffer (destination)
- * @return 0 on success, negative on fail
+ * @brief Read one conversion using RDATA. Preferred read.
+ *
+ * RDATA latches the sample on the command, so the transfer cannot be torn by a
+ * conversion completing part-way through. Pair with ads_emg_start_rdata().
+ *
+ * @param pAds     Device handle.
+ * @param pOut     Receives one sample per set bit, ascending channel order.
+ * @param ch_mask  Channels to extract, bit 0 = CH1. Must be non-zero.
+ * @return 0 on success, -EIO if the status word was misaligned (sample
+ *         discarded), negative errno on failure.
  */
-int ads_emg_dsp(struct emg_buffer* pEMGBuffer,
-                struct dsp_double_buffer* pDSPBuffer);
+int ads_emg_read_rdata_masked(struct ads129x_dev* pAds, int32_t* pOut,
+                              uint8_t ch_mask);
 
 /**
- * @brief Start ADS129x conversion
- * @param pAds: Pointer to ADS129x device struct
- * @return 0 on success, negative on fail
+ * @brief Read one frame in continuous mode, extracting selected channels.
+ *
+ * Requires ads_emg_start_continuous(). Prefer ads_emg_read_rdata_masked():
+ * continuous mode does not latch.
+ *
+ * @param pAds     Device handle.
+ * @param pOut     Receives one sample per set bit, ascending channel order.
+ * @param ch_mask  Channels to extract, bit 0 = CH1. Must be non-zero.
+ * @return 0 on success, -EBUSY if no sample is pending, -EIO if the status
+ *         word was misaligned, negative errno on failure.
  */
-int ads_emg_start_continuous(const struct ads129x_dev* pAds);
+int ads_emg_read_frame_masked(struct ads129x_dev* pAds, int32_t* pOut,
+                              uint8_t ch_mask);
 
 /**
- * @brief Stop ADS129x conversion
- * @param pAds: Pointer to ADS129x device struct
- * @return 0 on success, negative on fail
+ * @brief Read one frame in continuous mode, channels CH1..CH@p channels.
+ *
+ * Convenience wrapper over ads_emg_read_frame_masked().
+ *
+ * @param pAds      Device handle.
+ * @param pOut      Receives @p channels samples, CH1 first.
+ * @param channels  How many channels, 1..ADS129x_NUM_CHANNELS.
+ * @return 0 on success, -EBUSY if no sample is pending, -EIO if the status
+ *         word was misaligned, negative errno on failure.
  */
-int ads_emg_stop(const struct ads129x_dev* pAds);
+int ads_emg_read_frame(struct ads129x_dev* pAds, int32_t* pOut,
+                       uint8_t channels);
 
 /**
- * @brief Read ADS129x device ID
- * @param pAds: Pointer to ADS129x device struct
- * @return Device ID on success, negative on fail
+ * @brief Start converting; data is handed over only when RDATA asks for it.
+ *
+ * The START pin must be held low for the command to take effect.
+ *
+ * @param pAds  Device handle.
+ * @return 0 on success, negative errno on failure.
+ */
+int ads_emg_start_rdata(struct ads129x_dev* pAds);
+
+/**
+ * @brief Start converting in continuous mode and arm the DRDY interrupt.
+ *
+ * The START pin must be held low for the command to take effect. Prefer
+ * ads_emg_start_rdata().
+ *
+ * @param pAds  Device handle.
+ * @return 0 on success, negative errno on failure.
+ */
+int ads_emg_start_continuous(struct ads129x_dev* pAds);
+
+/**
+ * @brief Read the ID register.
+ *
+ * Low 5 bits == 0x12 identifies the 8-channel parts: 0x92 is the ADS1298,
+ * 0xD2 the ADS1298R.
+ *
+ * @param pAds  Device handle.
+ * @return Register value 0..255, or negative errno on failure.
  */
 int ads_read_id(const struct ads129x_dev* pAds);
+
 #endif
